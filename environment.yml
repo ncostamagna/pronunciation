@@ -1,0 +1,26 @@
+name: pronunciation
+channels:
+  - conda-forge
+dependencies:
+  - python=3.14.4
+  - pip
+  - pip:
+      - faster-whisper==1.1.1
+      - ctranslate2==4.7.1
+      - transformers>=4.47.0
+      - torch==2.11.0
+      - torchaudio==2.11.0
+      - sounddevice>=0.4.6
+      - scipy==1.17.1
+      - numpy==2.4.4
+      - phonemizer==3.3.0
+      - requests>=2.28.0
+      - colorama>=0.4.6
+      - tqdm>=4.64.0
+      - huggingface-hub>=1.0.0
+      - safetensors>=0.4.0
+      - tokenizers>=0.21.0
+      - filelock>=3.0.0
+      - packaging>=23.0
+      - regex>=2024.0.0
+      - more-itertools>=10.0.0
