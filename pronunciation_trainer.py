@@ -13,6 +13,7 @@ from __future__ import annotations
 # ─────────────────────────────────────────────────────────────────────────────
 import argparse
 import os
+import random as _random
 import re
 import sys
 import tempfile
@@ -882,7 +883,23 @@ Examples:
                    help="Recording length in seconds (default: 5)")
     p.add_argument("--difficulty", choices=["beginner", "intermediate", "advanced"],
                    help="Filter built-in sentences by difficulty")
+    p.add_argument("--random", action="store_true",
+                   help="Shuffle sentences randomly (no repeats)")
+    p.add_argument("--limit", type=int, default=None, metavar="N",
+                   help="Practice only the first N sentences (after optional shuffle)")
     return p
+
+
+def _apply_random_and_limit(sentences: List[str], args: argparse.Namespace) -> List[str]:
+    if args.random:
+        sentences = sentences[:]
+        _random.shuffle(sentences)
+    if args.limit is not None:
+        if args.limit < 1:
+            c("--limit must be at least 1.", Fore.RED)
+            sys.exit(1)
+        sentences = sentences[: args.limit]
+    return sentences
 
 
 def _get_sentences(args: argparse.Namespace) -> List[str]:
@@ -893,6 +910,7 @@ def _get_sentences(args: argparse.Namespace) -> List[str]:
         with open(args.file, encoding="utf-8") as f:
             text = f.read()
         sentences = split_sentences(text)
+        sentences = _apply_random_and_limit(sentences, args)
         c(f"  📂 Loaded {len(sentences)} sentence(s) from '{args.file}'.", Fore.CYAN)
         return sentences
 
@@ -913,6 +931,7 @@ def _get_sentences(args: argparse.Namespace) -> List[str]:
                 blank_streak = 0
                 lines.append(line)
         sentences = split_sentences(" ".join(lines))
+        sentences = _apply_random_and_limit(sentences, args)
         c(f"\n  📄 Detected {len(sentences)} sentence(s).", Fore.CYAN)
         return sentences
 
@@ -924,6 +943,7 @@ def _get_sentences(args: argparse.Namespace) -> List[str]:
         c(f"No built-in sentences for difficulty '{args.difficulty}'.", Fore.RED)
         sys.exit(1)
     sentences = [s["text"] for s in pool]
+    sentences = _apply_random_and_limit(sentences, args)
     label = f" [{args.difficulty}]" if args.difficulty else ""
     c(f"  📚 Built-in mode: {len(sentences)} sentence(s){label}.", Fore.CYAN)
     return sentences

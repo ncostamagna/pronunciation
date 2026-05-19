@@ -120,6 +120,8 @@ Paste or type a paragraph in the terminal, then press **Enter twice** to start. 
 | `--difficulty beginner\|intermediate\|advanced` | all | Filter built-in sentences |
 | `--duration SEC` | `5` | Recording length in seconds |
 | `--no-llm` | off | Skip Ollama entirely — show raw phoneme diffs only |
+| `--random` | off | Shuffle sentences randomly (no repeats) |
+| `--limit N` | all | Practice only N sentences (applied after shuffle) |
 
 ---
 
