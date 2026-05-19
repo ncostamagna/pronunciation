@@ -2,7 +2,7 @@
 
 Fully local English pronunciation trainer CLI. No cloud APIs — everything runs on your machine.
 
-**Pipeline:** Microphone → Whisper → Wav2Vec2 → eSpeak NG → Phoneme Diff → Ollama/Mistral → Feedback
+**Pipeline:** Microphone → Whisper (transcript + word timestamps) → Wav2Vec2 (full-audio IPA frames) → Tokenizer IPA diff → Ollama/Mistral → Feedback
 
 ---
 
@@ -43,7 +43,7 @@ conda env create -f environment.yml
 conda activate pronunciation
 ```
 
-> First run will download Whisper (~244 MB) and Wav2Vec2 (~360 MB) models automatically.
+> First run will download Whisper small (~244 MB) and `facebook/wav2vec2-lv-60-espeak-cv-ft` (~1.1 GB) automatically.
 
 ---
 
@@ -129,10 +129,10 @@ Paste or type a paragraph in the terminal, then press **Enter twice** to start. 
 2. Press **Enter** when ready — a 3…2…1 countdown starts
 3. Speak clearly into your microphone
 4. The app analyzes your audio:
-   - **Whisper** transcribes what you said
-   - **Wav2Vec2** extracts the acoustic character sequence (no language model — reveals real mispronunciations)
-   - **eSpeak NG** converts both your words and the reference to IPA phonemes
-   - A phoneme diff is run word by word
+   - **Whisper** transcribes what you said and provides per-word timestamps
+   - Words that match the reference are marked correct immediately
+   - For mismatched words: **Wav2Vec2** (`wav2vec2-lv-60-espeak-cv-ft`) runs on the full audio and the per-word frame slice gives the acoustic IPA; the tokenizer encodes the reference word to IPA using the same vocabulary — both sides are compared directly
+   - **eSpeak NG** is used by the tokenizer internally to generate training-compatible IPA
 5. Results are shown with ✅ / ❌ per word, IPA comparison, and a score
 6. **Ollama/Mistral** generates a coaching tip for each wrong word
 7. At the end of all sentences, a session summary shows your overall score, most missed phonemes, and minimal pair practice suggestions
@@ -212,14 +212,18 @@ Check system audio settings. List available devices:
 python -c "import sounddevice; print(sounddevice.query_devices())"
 ```
 
-### eSpeak NG not found (phonemizer warning)
+### eSpeak NG library not found
+The app locates `libespeak-ng` automatically at the standard Homebrew path (`/opt/homebrew/lib/libespeak-ng.dylib`) or common Linux paths. If it's installed somewhere else, set the environment variable before running:
+
+```bash
+export PHONEMIZER_ESPEAK_LIBRARY=/path/to/libespeak-ng.dylib
+python pronunciation_trainer.py
 ```
-⚠️  phonemizer/espeak-ng not available — phoneme comparison disabled
-```
-Install eSpeak NG (see Install step 1 above). The app still works — it falls back to word-level comparison.
+
+If eSpeak NG is not installed at all, install it (see step 1) and rerun. The tokenizer needs it to generate reference IPA.
 
 ### Model download fails / slow
-Whisper and Wav2Vec2 download on first run. If interrupted, rerun — HuggingFace caches partial downloads. Models are cached at `~/.cache/huggingface/` and `~/.cache/whisper/`.
+Whisper (~244 MB) and Wav2Vec2 (~1.1 GB) download on first run. If interrupted, rerun — HuggingFace caches partial downloads. Models are cached at `~/.cache/huggingface/` and `~/.cache/whisper/`.
 
 ### `conda env create` fails on Python 3.14
 Some pip packages may not yet ship wheels for Python 3.14. If you see build errors, pin Python to `3.11` in `environment.yml` and recreate:

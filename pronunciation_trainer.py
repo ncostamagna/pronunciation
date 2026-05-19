@@ -17,10 +17,12 @@ import re
 import sys
 import tempfile
 import time
+import uuid
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 warnings.filterwarnings("ignore")
@@ -38,13 +40,37 @@ except ImportError as exc:
 try:
     import torch
     from faster_whisper import WhisperModel
-    from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+    from transformers import (
+        Wav2Vec2ForCTC,
+        Wav2Vec2FeatureExtractor,
+        Wav2Vec2PhonemeCTCTokenizer,
+    )
 except ImportError as exc:
     sys.exit(f"Missing ML dep: {exc}\nRun: conda env create -f environment.yml")
 
 try:
+    import shutil as _shutil
+    # phonemizer 3.x uses ctypes to load libespeak-ng directly (not the binary).
+    # On macOS with Homebrew the library lives in /opt/homebrew/lib which is
+    # outside the conda env's default search path, so ctypes.find_library fails.
+    # We point it at the Homebrew dylib explicitly before importing phonemize.
+    _LIB_CANDIDATES = [
+        "/opt/homebrew/lib/libespeak-ng.dylib",         # macOS arm64/x86_64
+        "/opt/homebrew/opt/espeak-ng/lib/libespeak-ng.dylib",
+        "/usr/lib/libespeak-ng.so.1",                   # Linux
+        "/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1",
+    ]
+    try:
+        from phonemizer.backend.espeak.wrapper import EspeakWrapper as _EW
+        for _lib in _LIB_CANDIDATES:
+            if os.path.exists(_lib):
+                _EW.set_library(_lib)
+                break
+    except Exception:
+        pass
     from phonemizer import phonemize as _phonemize_fn
-    _PHONEMIZER_OK = True
+    from phonemizer.backend.espeak.espeak import EspeakBackend as _EspeakBE
+    _PHONEMIZER_OK = _EspeakBE.is_available()
 except ImportError:
     _PHONEMIZER_OK = False
 
@@ -64,11 +90,14 @@ except ImportError:
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
-SAMPLE_RATE   = 16000                         # Hz — required by Whisper & Wav2Vec2
-OLLAMA_URL    = "http://localhost:11434/api/generate"
-OLLAMA_MODEL  = "mistral"
-WAV2VEC2_ID   = "facebook/wav2vec2-base-960h"
-WHISPER_SIZE  = "small"
+SAMPLE_RATE           = 16000
+OLLAMA_URL            = "http://localhost:11434/api/generate"
+OLLAMA_MODEL          = "mistral"
+WHISPER_SIZE          = "small"
+# Outputs IPA phonemes directly from audio — much more accurate than base-960h
+WAV2VEC2_PHO_ID       = "facebook/wav2vec2-lv-60-espeak-cv-ft"
+# wav2vec2 CNN feature extractor stride: 320 samples = 20 ms at 16 kHz
+WAV2VEC2_FRAME_STRIDE = 320
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Built-in corpus — 20 sentences targeting Spanish-speaker pain points:
@@ -227,22 +256,55 @@ def split_sentences(text: str) -> List[str]:
 # Model loading
 # ─────────────────────────────────────────────────────────────────────────────
 def load_models():
-    """Load faster-whisper (small) and Wav2Vec2. First run downloads ~600 MB."""
-    c("\n  Loading models — first run downloads ~600 MB.\n", Fore.YELLOW)
+    """Load faster-whisper + wav2vec2-lv-60-espeak-cv-ft. First run ~1.5 GB download."""
+    c("\n  Loading models — first run downloads ~1.5 GB.\n", Fore.YELLOW)
 
     c("  ⏳ Whisper (small)...", Fore.YELLOW, end="\r")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device       = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
     w_model = WhisperModel(WHISPER_SIZE, device=device, compute_type=compute_type)
-    c("  ✅ Whisper ready.     ", Fore.GREEN)
+    c("  ✅ Whisper ready.                        ", Fore.GREEN)
 
-    c("  ⏳ Wav2Vec2...        ", Fore.YELLOW, end="\r")
-    processor = Wav2Vec2Processor.from_pretrained(WAV2VEC2_ID)
-    wv_model  = Wav2Vec2ForCTC.from_pretrained(WAV2VEC2_ID)
-    wv_model.eval()
-    c("  ✅ Wav2Vec2 ready.    ", Fore.GREEN)
+    c("  ⏳ Wav2Vec2 phoneme model (lv-60)...     ", Fore.YELLOW, end="\r")
+    feat_ext  = Wav2Vec2FeatureExtractor.from_pretrained(WAV2VEC2_PHO_ID)
+    # Tokenizer needs espeak to ENCODE text → phoneme IDs (reference IPA).
+    # espeak library is available via PHONEMIZER_ESPEAK_LIBRARY / set_library above,
+    # but the tokenizer uses a subprocess check for the binary name 'espeak'.
+    # If init_backend fails (espeak binary not found), fall back to no-op so the
+    # tokenizer still loads for DECODE-only use.
+    try:
+        tokenizer = Wav2Vec2PhonemeCTCTokenizer.from_pretrained(WAV2VEC2_PHO_ID)
+    except Exception:
+        _orig = Wav2Vec2PhonemeCTCTokenizer.init_backend
+        Wav2Vec2PhonemeCTCTokenizer.init_backend = lambda self, lang: None
+        try:
+            tokenizer = Wav2Vec2PhonemeCTCTokenizer.from_pretrained(WAV2VEC2_PHO_ID)
+        finally:
+            Wav2Vec2PhonemeCTCTokenizer.init_backend = _orig
+    pho_model = Wav2Vec2ForCTC.from_pretrained(WAV2VEC2_PHO_ID)
+    pho_model.eval()
+    c("  ✅ Phoneme model ready.                  ", Fore.GREEN)
 
-    return w_model, processor, wv_model
+    return w_model, (feat_ext, tokenizer), pho_model
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Session folder management
+# ─────────────────────────────────────────────────────────────────────────────
+SESSIONS_DIR = Path("sessions")
+
+def new_session_dir() -> Path:
+    """Create sessions/<uuid>/ and return its path."""
+    path = SESSIONS_DIR / str(uuid.uuid4())
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+def save_sentence_files(session_dir: Path, idx: int, phrase: str, audio: np.ndarray) -> None:
+    """Save phrase.txt and me.wav inside sessions/<uuid>/<idx:02d>/."""
+    folder = session_dir / f"{idx:02d}"
+    folder.mkdir(exist_ok=True)
+    (folder / "phrase.txt").write_text(phrase, encoding="utf-8")
+    wavfile.write(str(folder / "me.wav"), SAMPLE_RATE, (audio * 32767).astype(np.int16))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -278,16 +340,30 @@ def record_audio(duration: int) -> np.ndarray:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Transcription — Whisper (language-model-guided, more accurate words)
+# Transcription — faster-whisper with word-level timestamps
 # ─────────────────────────────────────────────────────────────────────────────
-def transcribe_whisper(audio: np.ndarray, model) -> str:
+@dataclass
+class WordSpan:
+    word: str
+    start: float   # seconds into the audio
+    end: float
+
+
+def transcribe_with_timestamps(audio: np.ndarray, model) -> Tuple[str, List[WordSpan]]:
+    """Return (full_text, per-word timing) using faster-whisper word timestamps."""
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         tmp = f.name
     try:
         wavfile.write(tmp, SAMPLE_RATE, (audio * 32767).astype(np.int16))
-        segments, _ = model.transcribe(tmp, language="en", beam_size=5)
-        text = " ".join(s.text for s in segments)
-        return text.strip().lower()
+        segments, _ = model.transcribe(tmp, language="en", beam_size=5, word_timestamps=True)
+        spans: List[WordSpan] = []
+        text_parts: List[str] = []
+        for seg in segments:
+            text_parts.append(seg.text)
+            if seg.words:
+                for w in seg.words:
+                    spans.append(WordSpan(w.word.strip(), w.start, w.end))
+        return " ".join(text_parts).strip().lower(), spans
     finally:
         try:
             os.unlink(tmp)
@@ -296,40 +372,77 @@ def transcribe_whisper(audio: np.ndarray, model) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Transcription — Wav2Vec2 CTC (acoustic, no language model)
-# The lack of a language model means mispronunciations survive in the output,
-# making it better for detecting phoneme-level errors.
+# Phoneme extraction — wav2vec2-lv-60-espeak-cv-ft on full audio
+#
+# Strategy: run the model ONCE on the entire recording (good context),
+# then slice the frame-level token predictions per word using Whisper timestamps.
+# Running on tiny isolated word clips produced garbage — models need context.
 # ─────────────────────────────────────────────────────────────────────────────
-def transcribe_wav2vec2(audio: np.ndarray, processor, model) -> str:
-    inputs = processor(audio, sampling_rate=SAMPLE_RATE, return_tensors="pt", padding=True)
+def audio_to_ipa_frames(audio: np.ndarray, pho_processor, model) -> "torch.Tensor":
+    """Run wav2vec2 on full audio. Returns raw argmax token IDs per frame."""
+    feat_ext, _ = pho_processor
+    inputs = feat_ext(audio, sampling_rate=SAMPLE_RATE, return_tensors="pt", padding=True)
     with torch.no_grad():
-        logits = model(**inputs).logits
-    ids = torch.argmax(logits, dim=-1)
-    return processor.decode(ids[0]).lower().strip()
+        logits = model(**inputs).logits   # [1, T, vocab]
+    return torch.argmax(logits, dim=-1)[0]  # [T]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phoneme extraction — eSpeak NG via phonemizer
-# ─────────────────────────────────────────────────────────────────────────────
-def word_ipa(word: str) -> str:
-    """Convert one word to IPA via eSpeak NG. Returns '' if unavailable."""
-    if not _PHONEMIZER_OK:
+def frames_to_ipa(frame_ids: "torch.Tensor", start_sec: float, end_sec: float,
+                  tokenizer) -> str:
+    """CTC-decode the frame range [start_sec, end_sec] to an IPA string."""
+    s = max(0, int(start_sec * SAMPLE_RATE / WAV2VEC2_FRAME_STRIDE))
+    e = min(len(frame_ids), int(end_sec * SAMPLE_RATE / WAV2VEC2_FRAME_STRIDE) + 1)
+    if e <= s:
         return ""
+    return tokenizer.decode(frame_ids[s:e].tolist()).strip()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reference IPA — tokenizer encoding (same vocab as acoustic model output)
+# ─────────────────────────────────────────────────────────────────────────────
+_tok_cache: Dict[str, str] = {}
+
+def word_ipa(word: str, tokenizer=None) -> str:
+    """
+    Convert one word to IPA using:
+    - tokenizer encoding (preferred — same vocab as wav2vec2 output)
+    - phonemizer eSpeak fallback
+    Returns '' if neither is available.
+    """
     clean = re.sub(r"[^a-zA-Z']", "", word).lower()
     if not clean:
         return ""
-    try:
-        out = _phonemize_fn(
-            clean,
-            backend="espeak",
-            language="en-us",
-            with_stress=False,
-            preserve_punctuation=False,
-            njobs=1,
-        )
-        return out.strip().replace(" ", "")
-    except Exception:
-        return ""
+    if clean in _tok_cache:
+        return _tok_cache[clean]
+
+    # Tokenizer path: uses the same IPA vocabulary as the acoustic model
+    if tokenizer is not None:
+        try:
+            ids = tokenizer(clean)["input_ids"]
+            ipa = tokenizer.decode(ids).strip()
+            _tok_cache[clean] = ipa
+            return ipa
+        except Exception:
+            pass
+
+    # eSpeak fallback (if tokenizer unavailable)
+    if _PHONEMIZER_OK:
+        try:
+            out = _phonemize_fn(
+                clean,
+                backend="espeak",
+                language="en-us",
+                with_stress=False,
+                preserve_punctuation=False,
+                njobs=1,
+            )
+            ipa = out.strip().replace(" ", "")
+            _tok_cache[clean] = ipa
+            return ipa
+        except Exception:
+            pass
+
+    return ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -388,29 +501,40 @@ def _phoneme_diff(user_ph: str, ref_ph: str) -> Tuple[bool, List[Tuple[str, str]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Core analysis — combines Wav2Vec2 + Whisper + phonemizer
+# Core analysis — word timestamps + per-word IPA from audio
 # ─────────────────────────────────────────────────────────────────────────────
 def analyze_pronunciation(
     ref_sentence: str,
-    wv_text: str,       # Wav2Vec2 acoustic output (primary — reveals mispronunciations)
-    whisper_text: str,  # Whisper output (fallback / display)
+    audio: np.ndarray,
+    whisper_text: str,
+    word_spans: List[WordSpan],
+    pho_processor,
+    pho_model,
 ) -> SentenceResult:
-    # Prefer the acoustic (Wav2Vec2) output because Whisper's LM corrects errors
-    user_text = wv_text if wv_text.strip() else whisper_text
-
     ref_tokens  = _tokenize(ref_sentence)
-    user_tokens = _tokenize(user_text)
+    user_tokens = _tokenize(whisper_text)
     aligned     = _align_words(user_tokens, ref_tokens)
+
+    _, tokenizer = pho_processor
+
+    # Run wav2vec2 once on full audio — better than per-word clips (needs context).
+    frame_ids = audio_to_ipa_frames(audio, pho_processor, pho_model)
+
+    span_map: Dict[str, Tuple[float, float]] = {}
+    for span in word_spans:
+        key = re.sub(r"[^a-zA-Z']", "", span.word).lower()
+        if key and key not in span_map:
+            span_map[key] = (span.start, span.end)
 
     results: List[WordResult] = []
     correct_count = total_count = 0
 
     for user_w, ref_w in aligned:
         if ref_w is None:
-            continue   # extra words the user added — ignore
+            continue
 
         total_count += 1
-        ref_ph = word_ipa(ref_w)
+        ref_ph = word_ipa(ref_w, tokenizer)
 
         if user_w is None:
             results.append(WordResult(
@@ -420,20 +544,40 @@ def analyze_pronunciation(
             ))
             continue
 
-        user_ph = word_ipa(user_w)
-
-        # If eSpeak unavailable, fall back to simple string equality
-        if not ref_ph or not user_ph:
-            ok = user_w == ref_w
-            if ok:
-                correct_count += 1
+        # Fast path: if Whisper transcribed the word correctly, pronunciation is OK.
+        # The IPA of the same word via the same tokenizer would be identical.
+        if user_w == ref_w:
+            correct_count += 1
             results.append(WordResult(
-                word=ref_w, correct=ok,
-                user_phonemes=user_ph or user_w,
-                ref_phonemes=ref_ph or ref_w,
-                wrong_pairs=[] if ok else [(user_ph or user_w, ref_ph or ref_w)],
+                word=ref_w, correct=True,
+                user_phonemes=ref_ph, ref_phonemes=ref_ph,
+                wrong_pairs=[],
             ))
             continue
+
+        # Word mismatch — get acoustic IPA from full-audio frame slice.
+        timing = span_map.get(user_w)
+        if timing is not None:
+            user_ph = frames_to_ipa(frame_ids, timing[0], timing[1], tokenizer)
+        else:
+            user_ph = ""
+
+        # Fallback: tokenizer-encode the Whisper transcript word
+        if not user_ph:
+            user_ph = word_ipa(user_w, tokenizer)
+
+        # If reference IPA unavailable, fall back to word equality (already false here)
+        if not ref_ph:
+            results.append(WordResult(
+                word=ref_w, correct=False,
+                user_phonemes=user_ph or user_w,
+                ref_phonemes=ref_w,
+                wrong_pairs=[(user_ph or user_w, ref_w)],
+            ))
+            continue
+
+        if not user_ph:
+            user_ph = user_w
 
         ok, wrong = _phoneme_diff(user_ph, ref_ph)
         if ok:
@@ -612,6 +756,7 @@ def run_one_sentence(
     wv_model,
     duration: int,
     use_llm: bool,
+    session_dir: Optional[Path] = None,
 ) -> Optional[SentenceResult]:
     """
     Display → record → analyze → show → prompt.
@@ -628,15 +773,18 @@ def run_one_sentence(
         except KeyboardInterrupt:
             return None
 
+        if session_dir is not None:
+            save_sentence_files(session_dir, idx, sentence, audio)
+
         c("\n  ⚙️  Analyzing...", Fore.CYAN)
 
-        whisper_text = transcribe_whisper(audio, w_model)
-        wv_text      = transcribe_wav2vec2(audio, wv_proc, wv_model)
+        whisper_text, word_spans = transcribe_with_timestamps(audio, w_model)
 
-        # Show what the system heard (Whisper is more readable)
-        c(f"  📝 Heard: \"{whisper_text}\"", Fore.CYAN + Style.DIM if hasattr(Style, "DIM") else Fore.CYAN)
+        c(f"  📝 Heard: \"{whisper_text}\"", Fore.CYAN)
 
-        result   = analyze_pronunciation(sentence, wv_text, whisper_text)
+        result = analyze_pronunciation(
+            sentence, audio, whisper_text, word_spans, wv_proc, wv_model
+        )
         feedback = ""
         if use_llm and ollama_ok():
             bad = [wr for wr in result.word_results if not wr.correct and wr.wrong_pairs]
@@ -671,6 +819,9 @@ def run_session(sentences: List[str], args: argparse.Namespace) -> None:
 
     c(f"\n  📄 {total} sentence(s) loaded.", Fore.CYAN)
 
+    session_dir = new_session_dir()
+    c(f"  💾 Session saved to: sessions/{session_dir.name}/", Fore.CYAN)
+
     w_model, wv_proc, wv_model = load_models()
 
     use_llm = not args.no_llm
@@ -691,6 +842,7 @@ def run_session(sentences: List[str], args: argparse.Namespace) -> None:
             sentence, i, total,
             w_model, wv_proc, wv_model,
             args.duration, use_llm,
+            session_dir=session_dir,
         )
         if result is None:
             c("\n  Session ended early.", Fore.YELLOW)
