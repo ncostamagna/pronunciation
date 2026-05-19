@@ -1,0 +1,402 @@
+[
+  {
+    "id": "1",
+    "text": "Whose computer is that on the desk?"
+  },
+  {
+    "id": "2",
+    "text": "I'll reach out to the dev team about the bug."
+  },
+  {
+    "id": "3",
+    "text": "Let's touch base right after the deployment."
+  },
+  {
+    "id": "4",
+    "text": "I'll loop in the architect on this decision."
+  },
+  {
+    "id": "5",
+    "text": "I'll get back to you once I check the logs."
+  },
+  {
+    "id": "6",
+    "text": "We'll hand over the project to the offshore team."
+  },
+  {
+    "id": "7",
+    "text": "Can you open a pull request for that feature?"
+  },
+  {
+    "id": "8",
+    "text": "The pipeline failed on the integration tests."
+  },
+  {
+    "id": "9",
+    "text": "We need to refactor the authentication module."
+  },
+  {
+    "id": "10",
+    "text": "Let me push the hotfix to production."
+  },
+  {
+    "id": "11",
+    "text": "You nailed it!"
+  },
+  {
+    "id": "12",
+    "text": "In a nutshell, we need to update our security policies."
+  },
+  {
+    "id": "13",
+    "text": "You did a bang-up job optimizing the database."
+  },
+  {
+    "id": "14",
+    "text": "Hang tight while we verify your credentials."
+  },
+  {
+    "id": "15",
+    "text": "The outcome of the software update was improved system performance."
+  },
+  {
+    "id": "16",
+    "text": "We need to avoid any more mistakes."
+  },
+  {
+    "id": "17",
+    "text": "We need to streamline the deployment processes."
+  },
+  {
+    "id": "18",
+    "text": "I have a very humble personality."
+  },
+  {
+    "id": "19",
+    "text": "We need to hash out the final API endpoints before deployment."
+  },
+  {
+    "id": "20",
+    "text": "The team scheduled a follow-up meeting to review the bug fixes."
+  },
+  {
+    "id": "21",
+    "text": "We saw a big traffic bump after the product launch."
+  },
+  {
+    "id": "22",
+    "text": "There was a power outage here."
+  },
+  {
+    "id": "23",
+    "text": "Bear with us while we restore the server."
+  },
+  {
+    "id": "24",
+    "text": "I don't recall the admin password."
+  },
+  {
+    "id": "25",
+    "text": "Python is easy to read, whereas C++ requires more complex syntax."
+  },
+  {
+    "id": "26",
+    "text": "I'm pissed off — the deployment failed again."
+  },
+  {
+    "id": "27",
+    "text": "I'm wrecked from debugging all day."
+  },
+  {
+    "id": "28",
+    "text": "We're in a pickle; the backup failed."
+  },
+  {
+    "id": "29",
+    "text": "It's your call on which framework to use."
+  },
+  {
+    "id": "30",
+    "text": "It's up to you if we deploy today."
+  },
+  {
+    "id": "31",
+    "text": "Going serverless was up to me."
+  },
+  {
+    "id": "32",
+    "text": "Keeping my word is what matters most to me."
+  },
+  {
+    "id": "33",
+    "text": "I don't think breaking a deal is ethical."
+  },
+  {
+    "id": "34",
+    "text": "The algorithm yields accurate predictions."
+  },
+  {
+    "id": "35",
+    "text": "Technical debt can pile up quickly."
+  },
+  {
+    "id": "36",
+    "text": "The system is fast; moreover, it scales."
+  },
+  {
+    "id": "37",
+    "text": "The tight timeline makes the project unfeasible."
+  },
+  {
+    "id": "38",
+    "text": "Issues may arise during deployment."
+  },
+  {
+    "id": "39",
+    "text": "Issues arose during last night's release."
+  },
+  {
+    "id": "40",
+    "text": "Server is overloaded; hence, responses are slow."
+  },
+  {
+    "id": "41",
+    "text": "The failure was due to uneven load distribution."
+  },
+  {
+    "id": "42",
+    "text": "We need to shrink the database size."
+  },
+  {
+    "id": "43",
+    "text": "The data was held in memory during the run."
+  },
+  {
+    "id": "44",
+    "text": "The platform must cater to all skill levels."
+  },
+  {
+    "id": "45",
+    "text": "Somehow, the server restarted by itself."
+  },
+  {
+    "id": "46",
+    "text": "The site had a two-hour outage last night."
+  },
+  {
+    "id": "47",
+    "text": "The startup is building a global brand."
+  },
+  {
+    "id": "48",
+    "text": "Check it in to the repo before EOD."
+  },
+  {
+    "id": "49",
+    "text": "Can you check it out and tell me what you think?"
+  },
+  {
+    "id": "50",
+    "text": "The request goes through multiple hops to the server."
+  },
+  {
+    "id": "51",
+    "text": "I didn't update the ticket — that's on me."
+  },
+  {
+    "id": "52",
+    "text": "I overlooked this edge case in the logic."
+  },
+  {
+    "id": "53",
+    "text": "Debugging without logs is a real hassle."
+  },
+  {
+    "id": "54",
+    "text": "I discussed the design with my colleagues."
+  },
+  {
+    "id": "55",
+    "text": "Thankfully, the backup was up to date."
+  },
+  {
+    "id": "56",
+    "text": "We leave it up to the OS to manage memory."
+  },
+  {
+    "id": "57",
+    "text": "The team is juggling three deployments at once."
+  },
+  {
+    "id": "58",
+    "text": "It's also worth noting the API has rate limits."
+  },
+  {
+    "id": "59",
+    "text": "We can craft the configuration directly in code."
+  },
+  {
+    "id": "60",
+    "text": "Hindsight is 20/20 — we should have tested more."
+  },
+  {
+    "id": "61",
+    "text": "I don't see what that has to do with the bug."
+  },
+  {
+    "id": "62",
+    "text": "Sorry, I'm having connection issues right now."
+  },
+  {
+    "id": "63",
+    "text": "The product wasn't successful in the end."
+  },
+  {
+    "id": "64",
+    "text": "Response times vary depending on server load."
+  },
+  {
+    "id": "65",
+    "text": "Too many requests can clog the server queue."
+  },
+  {
+    "id": "66",
+    "text": "We distrust all external input by default."
+  },
+  {
+    "id": "67",
+    "text": "Don't be too colorful — just stick to the facts."
+  },
+  {
+    "id": "68",
+    "text": "He's roaming around the world as a digital nomad."
+  },
+  {
+    "id": "69",
+    "text": "If we had had these tools earlier, it'd be easier."
+  },
+  {
+    "id": "70",
+    "text": "The system will carry out the backup at midnight."
+  },
+  {
+    "id": "71",
+    "text": "Despite the bug, the team carried on just fine."
+  },
+  {
+    "id": "72",
+    "text": "The app keeps on crashing every time I open it."
+  },
+  {
+    "id": "73",
+    "text": "Something strange is going on with the database."
+  },
+  {
+    "id": "74",
+    "text": "I'm currently working on a new mobile feature."
+  },
+  {
+    "id": "75",
+    "text": "I'll follow up with the vendor about the license."
+  },
+  {
+    "id": "76",
+    "text": "We need to sort out the permissions issue first."
+  },
+  {
+    "id": "77",
+    "text": "We plan to roll out the new feature on Monday."
+  },
+  {
+    "id": "78",
+    "text": "Before coding, let's map out the full user flow."
+  },
+  {
+    "id": "79",
+    "text": "Can you lay out the steps to reproduce the bug?"
+  },
+  {
+    "id": "80",
+    "text": "Someone should bring up the performance issues today."
+  },
+  {
+    "id": "81",
+    "text": "Let's go over the pull request before merging."
+  },
+  {
+    "id": "82",
+    "text": "The support team is looking into the sync issue."
+  },
+  {
+    "id": "83",
+    "text": "Let's get together next week to review the roadmap."
+  },
+  {
+    "id": "84",
+    "text": "One shortcoming of this API is poor documentation."
+  },
+  {
+    "id": "85",
+    "text": "The dev spent hours trying to track down the leak."
+  },
+  {
+    "id": "86",
+    "text": "Let me fix up the config file and we'll retry."
+  },
+  {
+    "id": "87",
+    "text": "The team patched up the server after the crash."
+  },
+  {
+    "id": "88",
+    "text": "We need to iron out a few bugs before going live."
+  },
+  {
+    "id": "89",
+    "text": "Reviewing pull requests is part of my duty."
+  },
+  {
+    "id": "90",
+    "text": "I need to pull my weight more in our next sprint."
+  },
+  {
+    "id": "91",
+    "text": "He posted anon on the forum."
+  },
+  {
+    "id": "92",
+    "text": "Let's go through the installation steps together."
+  },
+  {
+    "id": "93",
+    "text": "Upon successful login, the dashboard will load."
+  },
+  {
+    "id": "94",
+    "text": "The server is down; we'll keep you posted."
+  },
+  {
+    "id": "95",
+    "text": "The software is outdated; therefore it must be upgraded."
+  },
+  {
+    "id": "96",
+    "text": "The firewall blocked the request, thus preventing access."
+  },
+  {
+    "id": "97",
+    "text": "The update fixes bugs. Moreover, it adds new features."
+  },
+  {
+    "id": "98",
+    "text": "All data was preserved. What's more, speed improved."
+  },
+  {
+    "id": "99",
+    "text": "The UI was redesigned. Furthermore, it works cross-platform."
+  },
+  {
+    "id": "100",
+    "text": "The migration succeeded. Also, all data was preserved."
+  }
+]
