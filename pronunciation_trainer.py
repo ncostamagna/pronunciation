@@ -398,6 +398,24 @@ def frames_to_ipa(frame_ids: "torch.Tensor", start_sec: float, end_sec: float,
     return tokenizer.decode(frame_ids[s:e].tolist()).strip()
 
 
+def word_audio_to_ipa(word_clip: np.ndarray, pho_processor, model) -> str:
+    """
+    Run wav2vec2 on an isolated word audio clip. Much more accurate than
+    slicing frame predictions from a full-sentence run, because the model's
+    bidirectional attention contaminates frame outputs with surrounding-word
+    phonemes when sliced.
+    """
+    feat_ext, tokenizer = pho_processor
+    min_samples = 1600  # 100ms minimum — wav2vec2 needs some context
+    if len(word_clip) < min_samples:
+        word_clip = np.pad(word_clip, (0, min_samples - len(word_clip)))
+    inputs = feat_ext(word_clip, sampling_rate=SAMPLE_RATE, return_tensors="pt", padding=True)
+    with torch.no_grad():
+        logits = model(**inputs).logits
+    ids = torch.argmax(logits, dim=-1)[0]
+    return tokenizer.decode(ids.tolist()).strip()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Reference IPA — tokenizer encoding (same vocab as acoustic model output)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -484,20 +502,28 @@ def _align_words(
     return pairs
 
 
-def _phoneme_diff(user_ph: str, ref_ph: str) -> Tuple[bool, List[Tuple[str, str]]]:
+def _phoneme_diff(
+    user_ph: str, ref_ph: str, tolerance: int = 0
+) -> Tuple[bool, List[Tuple[str, str]]]:
     """
-    Character-level diff of two IPA strings.
+    Token-level diff of two IPA strings (tokens are space-separated or single chars).
     Returns (is_correct, [(user_chunk, ref_chunk), ...]) for every mismatch.
+    tolerance: number of mismatched tokens that are still considered correct.
     """
     if user_ph == ref_ph:
         return True, []
-    sm = SequenceMatcher(None, list(user_ph), list(ref_ph), autojunk=False)
+    # Split on whitespace if the string has spaces (tokenizer output), else chars
+    u_tokens = user_ph.split() if " " in user_ph else list(user_ph)
+    r_tokens = ref_ph.split()  if " " in ref_ph  else list(ref_ph)
+    sm = SequenceMatcher(None, u_tokens, r_tokens, autojunk=False)
     wrong: List[Tuple[str, str]] = []
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag != "equal":
-            u = "".join(list(user_ph)[i1:i2])
-            r = "".join(list(ref_ph)[j1:j2])
+            u = " ".join(u_tokens[i1:i2])
+            r = " ".join(r_tokens[j1:j2])
             wrong.append((u, r))
+    if len(wrong) <= tolerance:
+        return True, []
     return False, wrong
 
 
@@ -511,15 +537,25 @@ def analyze_pronunciation(
     word_spans: List[WordSpan],
     pho_processor,
     pho_model,
+    strictness: str = "normal",
 ) -> SentenceResult:
+    """
+    strictness:
+      lenient — Whisper word match = correct, no acoustic check.
+      normal  — same as lenient (default, tolerates minor acoustic noise).
+      strict  — always runs acoustic IPA check; word-match alone is not enough.
+    """
+    # lenient : word-match only, no acoustic IPA check
+    # normal  : acoustic IPA check, tolerance=0 (exact match required)
+    # strict  : acoustic IPA check, tolerance=0 + fail on unverified words
+    acoustic_tolerance      = {"lenient": 0, "normal": 0, "strict": 0}.get(strictness, 0)
+    use_acoustic_for_matched = strictness in ("normal", "strict")
+
     ref_tokens  = _tokenize(ref_sentence)
     user_tokens = _tokenize(whisper_text)
     aligned     = _align_words(user_tokens, ref_tokens)
 
     _, tokenizer = pho_processor
-
-    # Run wav2vec2 once on full audio — better than per-word clips (needs context).
-    frame_ids = audio_to_ipa_frames(audio, pho_processor, pho_model)
 
     span_map: Dict[str, Tuple[float, float]] = {}
     for span in word_spans:
@@ -545,9 +581,19 @@ def analyze_pronunciation(
             ))
             continue
 
-        # Fast path: if Whisper transcribed the word correctly, pronunciation is OK.
-        # The IPA of the same word via the same tokenizer would be identical.
-        if user_w == ref_w:
+        if user_w != ref_w:
+            # Whisper heard a different word — wrong pronunciation by definition.
+            user_ph = word_ipa(user_w, tokenizer) or user_w
+            # Store "heard_word / ipa" so display can show the actual word heard.
+            results.append(WordResult(
+                word=ref_w, correct=False,
+                user_phonemes=f"{user_w} / {user_ph}", ref_phonemes=ref_ph,
+                wrong_pairs=[(user_ph, ref_ph)],
+            ))
+            continue
+
+        # Word matched — lenient accepts immediately; normal/strict run acoustic check.
+        if not use_acoustic_for_matched:
             correct_count += 1
             results.append(WordResult(
                 word=ref_w, correct=True,
@@ -556,31 +602,44 @@ def analyze_pronunciation(
             ))
             continue
 
-        # Word mismatch — get acoustic IPA from full-audio frame slice.
+        # Acoustic IPA: run wav2vec2 on the isolated word clip (not frame-sliced
+        # from full-audio, which bleeds context across word boundaries).
         timing = span_map.get(user_w)
         if timing is not None:
-            user_ph = frames_to_ipa(frame_ids, timing[0], timing[1], tokenizer)
+            s = int(timing[0] * SAMPLE_RATE)
+            e = int(timing[1] * SAMPLE_RATE)
+            user_ph = word_audio_to_ipa(audio[s:e], pho_processor, pho_model)
         else:
             user_ph = ""
 
-        # Fallback: tokenizer-encode the Whisper transcript word
         if not user_ph:
-            user_ph = word_ipa(user_w, tokenizer)
+            # Acoustic extraction failed — no frame data for this word.
+            # In strict mode: count as wrong (can't verify). Otherwise: trust Whisper.
+            if strictness == "strict":
+                results.append(WordResult(
+                    word=ref_w, correct=False,
+                    user_phonemes="", ref_phonemes=ref_ph,
+                    wrong_pairs=[("?", ref_ph)],
+                ))
+            else:
+                correct_count += 1
+                results.append(WordResult(
+                    word=ref_w, correct=True,
+                    user_phonemes="", ref_phonemes=ref_ph,
+                    wrong_pairs=[],
+                ))
+            continue
 
-        # If reference IPA unavailable, fall back to word equality (already false here)
         if not ref_ph:
             results.append(WordResult(
                 word=ref_w, correct=False,
-                user_phonemes=user_ph or user_w,
+                user_phonemes=user_ph,
                 ref_phonemes=ref_w,
-                wrong_pairs=[(user_ph or user_w, ref_w)],
+                wrong_pairs=[(user_ph, ref_w)],
             ))
             continue
 
-        if not user_ph:
-            user_ph = user_w
-
-        ok, wrong = _phoneme_diff(user_ph, ref_ph)
+        ok, wrong = _phoneme_diff(user_ph, ref_ph, tolerance=acoustic_tolerance)
         if ok:
             correct_count += 1
         results.append(WordResult(
@@ -635,7 +694,9 @@ def get_word_feedback(wrong_words: List[WordResult]) -> str:
     lines = []
     for w in wrong_words:
         if w.wrong_pairs:
-            u = w.user_phonemes or "?"
+            raw = w.user_phonemes or "?"
+            # "heard_word / ipa" format — extract just the IPA part
+            u = raw.split(" / ", 1)[1] if " / " in raw else raw
             lines.append(f"- '{w.word}': said /{u}/, correct /{w.ref_phonemes}/")
     if not lines:
         return ""
@@ -674,19 +735,59 @@ _PAIR_FALLBACK: Dict[str, str] = {
     "uː": "full/fool, pull/pool, look/Luke",
 }
 
+# Phoneme description hints for common trouble sounds
+_IPA_HINTS: Dict[str, str] = {
+    "θ": "th unvoiced — tongue between teeth, no voice (think/three)",
+    "ð": "th voiced — tongue between teeth, with voice (this/the)",
+    "v": "v — upper teeth on lower lip (very/vest)",
+    "ɹ": "r — tongue curled back, no trill (red/run)",
+    "r": "r — tongue curled back, no trill (red/run)",
+    "ɪ": "short i — mouth relaxed (ship/sit)",
+    "iː": "long ee — lips spread wide (sheep/seat)",
+    "ʊ": "short oo — lips slightly rounded (foot/book)",
+    "uː": "long oo — lips fully rounded (food/moon)",
+    "æ": "short a — mouth wide open (cat/bad)",
+    "ŋ": "ng — back of tongue blocks throat (sing/ring)",
+    "ʃ": "sh — lips forward (ship/fish)",
+    "dʒ": "j — like sh but voiced with stop (jump/judge)",
+    "tʃ": "ch — tongue stops then releases (chair/watch)",
+}
+
+
+def _ipa_hint_for_ref(ref_ph: str) -> Optional[str]:
+    """Return the most relevant phoneme hint for a failed word's ref IPA."""
+    for ph, hint in _IPA_HINTS.items():
+        if ph in ref_ph:
+            return f"/{ph}/: {hint}"
+    return None
+
 
 def show_sentence_result(result: SentenceResult, feedback: str) -> None:
     print()
     for wr in result.word_results:
         if wr.correct:
-            c(f'  ✅  "{wr.word}"', Fore.GREEN, end="")
-            c(f"  → /{wr.ref_phonemes}/ ✓", Fore.GREEN)
+            if not wr.user_phonemes:
+                c(f'  ✅  "{wr.word}"', Fore.GREEN, end="")
+                c(f"  → /{wr.ref_phonemes}/", Fore.GREEN)
+            else:
+                c(f'  ✅  "{wr.word}"', Fore.GREEN, end="")
+                c(f"  → /{wr.ref_phonemes}/ ✓", Fore.GREEN)
         else:
             c(f'  ❌  "{wr.word}"', Fore.RED, end="")
-            if wr.user_phonemes:
-                c(f"  → you said /{wr.user_phonemes}/, correct is /{wr.ref_phonemes}/", Fore.RED)
+            if wr.user_phonemes and " / " in wr.user_phonemes:
+                # "heard_word / ipa" format — Whisper heard a different word
+                heard_word, heard_ipa = wr.user_phonemes.split(" / ", 1)
+                c(f"  → Whisper heard \"{heard_word}\"", Fore.RED)
+                c(f"       said /{heard_ipa}/  →  should be /{wr.ref_phonemes}/", Fore.RED)
+            elif wr.user_phonemes and wr.user_phonemes not in ("", "?"):
+                # Acoustic IPA mismatch
+                c(f"  → said /{wr.user_phonemes}/  →  should be /{wr.ref_phonemes}/", Fore.RED)
             else:
-                c(f"  → correct /{wr.ref_phonemes}/ (not detected in audio)", Fore.RED)
+                # Word not heard at all
+                c(f"  → not heard  (should be /{wr.ref_phonemes}/)", Fore.RED)
+            hint = _ipa_hint_for_ref(wr.ref_phonemes)
+            if hint:
+                c(f"       💡 {hint}", Fore.YELLOW)
 
     pct   = result.pct
     col   = Fore.GREEN if pct >= 80 else (Fore.YELLOW if pct >= 50 else Fore.RED)
@@ -758,6 +859,7 @@ def run_one_sentence(
     duration: int,
     use_llm: bool,
     session_dir: Optional[Path] = None,
+    strictness: str = "normal",
 ) -> Optional[SentenceResult]:
     """
     Display → record → analyze → show → prompt.
@@ -784,7 +886,8 @@ def run_one_sentence(
         c(f"  📝 Heard: \"{whisper_text}\"", Fore.CYAN)
 
         result = analyze_pronunciation(
-            sentence, audio, whisper_text, word_spans, wv_proc, wv_model
+            sentence, audio, whisper_text, word_spans, wv_proc, wv_model,
+            strictness=strictness,
         )
         feedback = ""
         if use_llm and ollama_ok():
@@ -838,12 +941,19 @@ def run_session(sentences: List[str], args: argparse.Namespace) -> None:
 
     stats = SessionStats()
 
+    strictness = args.strictness
+    if strictness == "lenient":
+        c("  🎯 Mode: word-recognition (Whisper) — most reliable", Fore.CYAN)
+    else:
+        c(f"  🎯 Mode: acoustic IPA ({strictness}) — experimental, may produce false negatives", Fore.YELLOW)
+
     for i, sentence in enumerate(sentences, 1):
         result = run_one_sentence(
             sentence, i, total,
             w_model, wv_proc, wv_model,
             args.duration, use_llm,
             session_dir=session_dir,
+            strictness=strictness,
         )
         if result is None:
             c("\n  Session ended early.", Fore.YELLOW)
@@ -887,6 +997,12 @@ Examples:
                    help="Shuffle sentences randomly (no repeats)")
     p.add_argument("--limit", type=int, default=None, metavar="N",
                    help="Practice only the first N sentences (after optional shuffle)")
+    p.add_argument("--strictness", choices=["lenient", "normal", "strict"],
+                   default="lenient",
+                   help="Pronunciation check level (default: lenient). "
+                        "lenient=word-match only via Whisper (most reliable, recommended); "
+                        "normal=acoustic IPA check, experimental; "
+                        "strict=acoustic IPA check exact, experimental")
     return p
 
 

@@ -122,6 +122,7 @@ Paste or type a paragraph in the terminal, then press **Enter twice** to start. 
 | `--no-llm` | off | Skip Ollama entirely — show raw phoneme diffs only |
 | `--random` | off | Shuffle sentences randomly (no repeats) |
 | `--limit N` | all | Practice only N sentences (applied after shuffle) |
+| `--strictness lenient\|normal\|strict` | `normal` | Pronunciation strictness. `lenient`: Whisper word-match = correct (no acoustic check). `normal`: acoustic IPA check, 1 phoneme token difference allowed. `strict`: acoustic IPA check, exact match required. |
 
 ---
 
