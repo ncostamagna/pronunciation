@@ -93,31 +93,23 @@ def play_audio(path: Path) -> None:
         os.startfile(str(path))
 
 
-def record_audio(duration: int) -> np.ndarray:
+def record_audio() -> np.ndarray:
     input(f"\n{Fore.CYAN}  Press Enter to record...{Style.RESET_ALL}")
 
-    for i in (3, 2, 1):
-        print(f"    {i}...", end="\r", flush=True)
-        time.sleep(1)
+    chunks: list[np.ndarray] = []
 
-    print(f"{Fore.RED}  Recording...              {Style.RESET_ALL}", end="\r", flush=True)
+    def _callback(indata, frames, time_info, status):
+        chunks.append(indata.copy())
 
-    audio = sd.rec(
-        int(duration * SAMPLE_RATE),
-        samplerate=SAMPLE_RATE,
-        channels=1,
-        dtype="float32",
-    )
+    print(f"{Fore.RED}  Recording... (Press Enter to stop){Style.RESET_ALL}", flush=True)
 
-    start = time.time()
-    while time.time() - start < duration:
-        remain = duration - (time.time() - start)
-        print(f"{Fore.RED}  Recording... {remain:.1f}s left  {Style.RESET_ALL}", end="\r", flush=True)
-        time.sleep(0.1)
+    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", callback=_callback):
+        input()
 
-    sd.wait()
-    c("  Done!                        ", Fore.GREEN)
-    return audio.flatten()
+    c("  Done!                              ", Fore.GREEN)
+    if not chunks:
+        return np.array([], dtype="float32")
+    return np.concatenate(chunks).flatten()
 
 
 def session_name() -> str:
@@ -267,15 +259,13 @@ def cmd_training(args: argparse.Namespace) -> None:
     if args.limit:
         phrases = phrases[: args.limit]
 
-    duration = args.duration
-
     SESSIONS_DIR.mkdir(exist_ok=True)
     session_dir = SESSIONS_DIR / session_name()
     session_dir.mkdir(parents=True)
 
     print()
     c("═" * 62, Fore.CYAN)
-    c(f"  Topic: {topic}  |  {len(phrases)} phrase(s)  |  {duration}s recording", Fore.CYAN, bold=True)
+    c(f"  Topic: {topic}  |  {len(phrases)} phrase(s)", Fore.CYAN, bold=True)
     c(f"  Session: sessions/{session_dir.name}/", Fore.CYAN)
     c("═" * 62, Fore.CYAN)
 
@@ -313,7 +303,7 @@ def cmd_training(args: argparse.Namespace) -> None:
         user_audio: np.ndarray | None = None
         while True:
             try:
-                user_audio = record_audio(duration)
+                user_audio = record_audio()
             except KeyboardInterrupt:
                 c("\n  Skipped recording.", Fore.YELLOW)
                 user_audio = None
@@ -331,7 +321,7 @@ def cmd_training(args: argparse.Namespace) -> None:
                 if choice == "l" and user_audio is not None:
                     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
                     try:
-                        wavfile.write(tmp.name, SAMPLE_RATE, (user_audio * 32767).astype(np.int16))
+                        wavfile.write(tmp.name, SAMPLE_RATE, (np.clip(np.nan_to_num(user_audio), -1.0, 1.0) * 32767).astype(np.int16))
                         tmp.close()
                         play_audio(Path(tmp.name))
                     finally:
@@ -356,7 +346,7 @@ def cmd_training(args: argparse.Namespace) -> None:
             wavfile.write(
                 str(item_dir / "me.wav"),
                 SAMPLE_RATE,
-                (user_audio * 32767).astype(np.int16),
+                (np.clip(np.nan_to_num(user_audio), -1.0, 1.0) * 32767).astype(np.int16),
             )
 
         completed += 1
@@ -419,8 +409,6 @@ def main() -> None:
                        help="Topic to practice (e.g. IT)")
     train.add_argument("--limit", type=int, default=None, metavar="N",
                        help="Max phrases to practice")
-    train.add_argument("--duration", type=int, default=5, metavar="SEC",
-                       help="Recording length in seconds (default: 5)")
     train.add_argument("--random", action="store_true",
                        help="Shuffle phrases")
 

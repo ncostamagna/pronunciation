@@ -63,15 +63,16 @@ If no API key is set, falls back to gTTS automatically.
 
 ```bash
 ./pronunciation training --topic IT
-./pronunciation training --topic IT --limit 5 --random --duration 7
+./pronunciation training --topic IT --limit 5 --random
 ```
 
 **Flow per phrase:**
 1. Phrase text is shown
 2. Press Enter → audio plays
 3. `[R]` repeat audio / `[N]` next
-4. Mic opens — speak the phrase
-5. `[R]` re-record / `[N]` next phrase
+4. Press Enter → mic opens, speak the phrase
+5. Press Enter again → stops recording
+6. `[L]` listen back / `[R]` re-record / `[N]` next phrase
 
 ---
 
@@ -90,7 +91,6 @@ If no API key is set, falls back to gTTS automatically.
 |------|---------|-------------|
 | `--topic TOPIC` | required | Topic to practice |
 | `--limit N` | all | Max phrases per session |
-| `--duration SEC` | `5` | Recording length in seconds |
 | `--random` | off | Shuffle phrases |
 
 ---
